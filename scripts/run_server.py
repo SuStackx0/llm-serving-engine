@@ -47,7 +47,7 @@ def main():
     print(f"  Max concurrent: {args.max_running}")
 
     engine = LLMEngine.from_config(model_cfg, engine_cfg)
-    app = create_app(engine)
+    app = create_app(engine, log_level=args.log_level)
 
     uvicorn.run(
         app,

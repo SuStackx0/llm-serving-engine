@@ -15,13 +15,17 @@ Key behaviours implemented:
      lowest-priority decode request (re-queue it as waiting).
 """
 
+import logging
 import time
 from collections import deque
 from typing import List, Optional
 
 from src.core.types import Request, SchedulerOutput, SequenceStatus
 from src.memory.block_manager import PhysicalBlockManager
+from src.observability import prompt_logger as plog
 from src.scheduler.request_queue import PriorityRequestQueue
+
+log = logging.getLogger("llm.engine")
 
 
 class Scheduler:
@@ -46,6 +50,8 @@ class Scheduler:
     def add_request(self, request: Request) -> None:
         request.status = SequenceStatus.WAITING
         self.waiting.push(request)
+        request.log_event("QUEUED", queue_depth=len(self.waiting))
+        plog.log_queued(request.request_id, len(self.waiting))
 
     def has_work(self) -> bool:
         return bool(self.running) or bool(self.waiting)
@@ -109,6 +115,8 @@ class Scheduler:
                 req.status = SequenceStatus.PREFILLING
                 req.prefill_start_time = time.monotonic()
                 self.running.append(req)
+                req.log_event("ADMITTED", blocks_allocated=blocks_needed, running=len(self.running))
+                plog.log_admitted(req.request_id, blocks_needed, len(self.running))
             else:
                 # Try preemption to make room
                 victim = self._select_preemption_victim()
@@ -174,7 +182,6 @@ class Scheduler:
         self.block_manager.free(victim.request_id)
         victim.block_table.clear()
         victim.num_cached_tokens = 0
-        # Drop generated tokens — will re-do prefill
         victim.output_token_ids.clear()
         victim.status = SequenceStatus.WAITING
         victim.prefill_start_time = None
@@ -183,6 +190,9 @@ class Scheduler:
         self.running.remove(victim)
         self.waiting.push(victim)
         output.preempted_requests.append(victim)
+
+        victim.log_event("PREEMPTED", running=len(self.running))
+        plog.log_preempted(victim.request_id, len(self.running))
 
     # ------------------------------------------------------------------
     # Stats

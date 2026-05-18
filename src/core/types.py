@@ -4,7 +4,19 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class LifecycleEvent:
+    """One timestamped event in a request's lifecycle."""
+    event: str
+    ts: float = field(default_factory=time.monotonic)   # monotonic seconds
+    wall_ts: float = field(default_factory=time.time)   # unix time for display
+    data: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"event": self.event, "wall_ts": self.wall_ts, **self.data}
 
 
 class SequenceStatus(Enum):
@@ -71,6 +83,12 @@ class Request:
 
     # Token streaming: the engine pushes new token ids here
     _token_queue: object = field(default=None, repr=False)
+
+    # Lifecycle event log — each major state transition is appended here
+    lifecycle: List[LifecycleEvent] = field(default_factory=list, repr=False)
+
+    def log_event(self, event: str, **data: Any) -> None:
+        self.lifecycle.append(LifecycleEvent(event=event, data=data))
 
     @property
     def prompt_len(self) -> int:

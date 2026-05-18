@@ -12,6 +12,7 @@ One engine step:
   5. For each finished request: signal the caller.
 """
 
+import logging
 import queue
 import threading
 import time
@@ -35,7 +36,10 @@ from src.model.loader import load_model
 from src.model.sampling import sample_token
 from src.model.transformer import LlamaForCausalLM
 from src.observability.metrics import MetricsCollector
+from src.observability import prompt_logger as plog
 from src.scheduler.scheduler import Scheduler
+
+log = logging.getLogger("llm.engine")
 
 
 class LLMEngine:
@@ -82,6 +86,7 @@ class LLMEngine:
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._step_counter: int = 0
 
     # ------------------------------------------------------------------
     # Factory
@@ -145,6 +150,7 @@ class LLMEngine:
             target=self._run_loop, name="engine-loop", daemon=True
         )
         self._thread.start()
+        log.info("Engine loop started.")
         print("Engine loop started.")
 
     def stop(self) -> None:
@@ -156,6 +162,10 @@ class LLMEngine:
         """Submit a request; returns a queue that yields token ids, None when done."""
         out_q: queue.Queue = queue.Queue()
         request._token_queue = out_q
+        request.log_event("SUBMITTED", prompt_tokens=request.prompt_len,
+                          max_tokens=request.sampling_params.max_tokens)
+        plog.log_submitted(request.request_id, request.prompt_len,
+                           request.sampling_params.max_tokens)
         self._input_queue.put(request)
         return out_q
 
@@ -182,7 +192,6 @@ class LLMEngine:
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            # Drain input queue
             self._drain_input_queue()
 
             if not self.scheduler.has_work():
@@ -190,6 +199,16 @@ class LLMEngine:
                 continue
 
             sched_out = self.scheduler.schedule()
+            self._step_counter += 1
+            plog.log_schedule_step(
+                step=self._step_counter,
+                prefill_count=len(sched_out.prefill_requests),
+                decode_count=len(sched_out.decode_requests),
+                preempted_count=len(sched_out.preempted_requests),
+                running_total=self.scheduler.num_running(),
+                waiting_total=self.scheduler.num_waiting(),
+            )
+
             if sched_out.is_empty():
                 time.sleep(0.001)
                 continue
@@ -217,12 +236,17 @@ class LLMEngine:
 
     def _step_prefill(self, requests: List[Request]) -> None:
         """Process the full prompt for each prefill request (no batching across requests)."""
-        for req in requests:
-            self._prefill_one(req)
+        for i, req in enumerate(requests):
+            self._prefill_one(req, batch_pos=i, batch_size=len(requests))
 
-    def _prefill_one(self, req: Request) -> None:
+    def _prefill_one(self, req: Request, batch_pos: int = 0, batch_size: int = 1) -> None:
         prompt_ids = req.prompt_token_ids
         seq_len = len(prompt_ids)
+
+        t0 = time.monotonic()
+        req.log_event("PREFILL_START", prompt_tokens=seq_len,
+                      batch_pos=batch_pos, batch_size=batch_size)
+        plog.log_prefill_start(req.request_id, seq_len, batch_pos, batch_size)
 
         input_ids = torch.tensor(prompt_ids, dtype=torch.long, device=self.device)
         positions = torch.arange(seq_len, dtype=torch.long, device=self.device)
@@ -237,33 +261,33 @@ class LLMEngine:
         with torch.no_grad():
             logits = self.model.forward(input_ids, positions, self.kv_cache, metadata)
 
-        # Sample next token from last-position logits
         last_logits = logits[-1].float()
         next_tok = sample_token(last_logits, req.sampling_params)
 
-        self.scheduler.on_prefill_complete(req)        # → DECODING, num_cached = prompt_len
-        self.scheduler.on_token_generated(
-            req, next_tok, self.tokenizer.eos_token_id
-        )
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        req.log_event("PREFILL_DONE", first_token=next_tok, ttft_ms=round(elapsed_ms, 2))
+        plog.log_prefill_done(req.request_id, next_tok, elapsed_ms)
+
+        self.scheduler.on_prefill_complete(req)
+        self.scheduler.on_token_generated(req, next_tok, self.tokenizer.eos_token_id)
         self.metrics.record_token()
 
-        # Push token to caller
         if req._token_queue is not None:
             req._token_queue.put(next_tok)
 
-        # If finished right after first token, notify
         if req.is_finished():
             self._finalize_request(req)
 
     def _step_decode(self, requests: List[Request]) -> None:
         """Generate one token for each decode request — processed individually."""
-        for req in requests:
+        for i, req in enumerate(requests):
             if req.is_finished():
                 continue
-            self._decode_one(req)
+            self._decode_one(req, batch_pos=i, batch_size=len(requests))
 
-    def _decode_one(self, req: Request) -> None:
-        ctx_len = req.num_cached_tokens   # total tokens in KV cache
+    def _decode_one(self, req: Request, batch_pos: int = 0, batch_size: int = 1) -> None:
+        ctx_len = req.num_cached_tokens
+        step = req.num_generated_tokens  # already has the prefill-generated token
 
         input_ids = torch.tensor([req.last_token_id], dtype=torch.long, device=self.device)
         positions = torch.tensor([ctx_len - 1], dtype=torch.long, device=self.device)
@@ -283,7 +307,10 @@ class LLMEngine:
         self.scheduler.on_token_generated(req, next_tok, self.tokenizer.eos_token_id)
         self.metrics.record_token()
 
-        # Check stop strings
+        plog.log_decode_step(req.request_id, step, next_tok, ctx_len, batch_pos, batch_size)
+        req.log_event("DECODE_STEP", step=step, token=next_tok, ctx_len=ctx_len,
+                      batch_pos=batch_pos, batch_size=batch_size)
+
         if not req.is_finished() and req.sampling_params.stop:
             decoded = self.tokenizer.decode(req.output_token_ids[-20:], skip_special_tokens=False)
             for stop in req.sampling_params.stop:
@@ -299,8 +326,24 @@ class LLMEngine:
 
     def _finalize_request(self, req: Request) -> None:
         self.metrics.record_request_complete(req)
+        total_ms = 0.0
+        if req.prefill_start_time and req.last_token_time:
+            total_ms = (req.last_token_time - req.prefill_start_time) * 1000
+        req.log_event(
+            "FINISHED",
+            reason=req.status.value,
+            output_tokens=req.num_generated_tokens,
+            total_ms=round(total_ms, 2),
+            ttft_ms=round(req.ttft_ms() or 0, 2),
+            tpot_ms=round(req.tpot_ms() or 0, 2),
+        )
+        plog.log_finished(
+            req.request_id, req.status.value,
+            req.num_generated_tokens, total_ms,
+            req.ttft_ms(), req.tpot_ms(),
+        )
         if req._token_queue is not None:
-            req._token_queue.put(None)   # sentinel: generation done
+            req._token_queue.put(None)
 
     # ------------------------------------------------------------------
     # Stats helpers for the API

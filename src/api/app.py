@@ -6,14 +6,28 @@ Usage:
     uvicorn.run(app, host="0.0.0.0", port=8000)
 """
 
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import completions, chat, models, health
+from src.api.routes import debug
 from src.engine.inference_engine import LLMEngine
 
 
-def create_app(engine: LLMEngine) -> FastAPI:
+def _configure_logging(level: str = "INFO") -> None:
+    fmt = "%(asctime)s  %(levelname)-8s  %(message)s"
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format=fmt)
+    # Engine / scheduler logs at requested level; uvicorn access logs at WARNING
+    logging.getLogger("llm.engine").setLevel(getattr(logging, level.upper(), logging.INFO))
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+def create_app(engine: LLMEngine, log_level: str = "INFO") -> FastAPI:
+    _configure_logging(log_level)
+
     app = FastAPI(
         title="LLM Serving Engine",
         description="vLLM-compatible LLM inference server with PagedAttention & Continuous Batching",
@@ -27,13 +41,13 @@ def create_app(engine: LLMEngine) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Attach engine to app state so routes can access it
     app.state.engine = engine
 
     app.include_router(completions.router)
     app.include_router(chat.router)
     app.include_router(models.router)
     app.include_router(health.router)
+    app.include_router(debug.router)
 
     @app.on_event("startup")
     async def _startup():
