@@ -1,0 +1,28 @@
+services:
+  llm-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODEL_ID: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    image: llm-serving-engine:latest
+    container_name: llm-engine
+    ports:
+      - "8000:8000"
+    environment:
+      # Override any of these to change runtime behaviour without rebuilding
+      - HF_HOME=/app/.hf_cache
+    # Mount a volume so HuggingFace weights are cached across rebuilds
+    volumes:
+      - hf-model-cache:/app/.hf_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s   # give the model time to load
+
+volumes:
+  hf-model-cache:
+    driver: local

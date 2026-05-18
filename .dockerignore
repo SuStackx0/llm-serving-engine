@@ -1,0 +1,13 @@
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.git
+.pytest_cache
+.hf_cache
+notebooks/
+docs/
+plan/
+benchmarks/
+tests/
+*.md
