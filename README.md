@@ -210,12 +210,3 @@ docs/             Theory docs, codebase walkthrough, honest resume guide
 
 ---
 
-## Docs
-
-| File | Covers |
-|---|---|
-| `docs/01_inference_engines_101.md` | Autoregressive generation, KV cache, batching — the theory |
-| `docs/02_paged_attention_and_scheduling.md` | PagedAttention memory layout, scheduler algorithm, GQA, sampling |
-| `docs/03_chunked_prefill_and_prefix_caching.md` | How both novel features work, the math, code paths |
-| `docs/04_codebase_walkthrough.md` | Every file explained + full end-to-end request trace |
-| `docs/05_resume_and_metrics.md` | Honest benchmark interpretation, what to say in interviews |
