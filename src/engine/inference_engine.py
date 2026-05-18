@@ -76,7 +76,12 @@ class LLMEngine:
             block_manager=block_manager,
             max_running_requests=engine_config.max_running_requests,
             max_waiting_requests=engine_config.max_waiting_requests,
+            enable_chunked_prefill=engine_config.enable_chunked_prefill,
+            max_chunk_size=engine_config.max_chunk_size,
+            min_chunk_size=engine_config.min_chunk_size,
+            enable_prefix_caching=engine_config.enable_prefix_caching,
         )
+        self.prefix_cache = self.scheduler.prefix_cache  # may be None
         self.metrics = MetricsCollector()
 
         # Thread-safe communication
@@ -240,43 +245,60 @@ class LLMEngine:
             self._prefill_one(req, batch_pos=i, batch_size=len(requests))
 
     def _prefill_one(self, req: Request, batch_pos: int = 0, batch_size: int = 1) -> None:
-        prompt_ids = req.prompt_token_ids
-        seq_len = len(prompt_ids)
+        chunk_start = req.chunk_start
+        chunk_end = req.chunk_end
+        chunk_len = chunk_end - chunk_start
+        is_final_chunk = (chunk_end == req.prompt_len)
 
         t0 = time.monotonic()
-        req.log_event("PREFILL_START", prompt_tokens=seq_len,
-                      batch_pos=batch_pos, batch_size=batch_size)
-        plog.log_prefill_start(req.request_id, seq_len, batch_pos, batch_size)
+        req.log_event("PREFILL_CHUNK_START", chunk_start=chunk_start, chunk_end=chunk_end,
+                      prompt_len=req.prompt_len, batch_pos=batch_pos, batch_size=batch_size)
+        plog.log_prefill_start(req.request_id, chunk_len, batch_pos, batch_size)
 
-        input_ids = torch.tensor(prompt_ids, dtype=torch.long, device=self.device)
-        positions = torch.arange(seq_len, dtype=torch.long, device=self.device)
+        # Record prefix cache hit/miss on the very first chunk of this request
+        if chunk_start == req.prefix_match_len:
+            if req.prefix_match_len > 0:
+                self.metrics.record_prefix_cache_hit(req.prefix_match_len)
+            else:
+                self.metrics.record_prefix_cache_miss()
+
+        chunk_ids = req.prompt_token_ids[chunk_start:chunk_end]
+        input_ids = torch.tensor(chunk_ids, dtype=torch.long, device=self.device)
+        positions = torch.arange(chunk_start, chunk_end, dtype=torch.long, device=self.device)
 
         metadata = AttentionMetadata(
-            prefill_seq_lens=[seq_len],
+            prefill_seq_lens=[chunk_len],
             prefill_block_tables=[req.block_table],
             decode_context_lens=[],
             decode_block_tables=[],
+            prefill_chunk_starts=[chunk_start],
         )
 
         with torch.no_grad():
             logits = self.model.forward(input_ids, positions, self.kv_cache, metadata)
 
-        last_logits = logits[-1].float()
-        next_tok = sample_token(last_logits, req.sampling_params)
-
         elapsed_ms = (time.monotonic() - t0) * 1000
-        req.log_event("PREFILL_DONE", first_token=next_tok, ttft_ms=round(elapsed_ms, 2))
-        plog.log_prefill_done(req.request_id, next_tok, elapsed_ms)
 
-        self.scheduler.on_prefill_complete(req)
-        self.scheduler.on_token_generated(req, next_tok, self.tokenizer.eos_token_id)
-        self.metrics.record_token()
+        if is_final_chunk:
+            last_logits = logits[-1].float()
+            next_tok = sample_token(last_logits, req.sampling_params)
 
-        if req._token_queue is not None:
-            req._token_queue.put(next_tok)
+            req.log_event("PREFILL_DONE", first_token=next_tok, ttft_ms=round(elapsed_ms, 2))
+            plog.log_prefill_done(req.request_id, next_tok, elapsed_ms)
 
-        if req.is_finished():
-            self._finalize_request(req)
+            self.scheduler.on_prefill_complete(req)
+            self.scheduler.on_token_generated(req, next_tok, self.tokenizer.eos_token_id)
+            self.metrics.record_token()
+
+            if req._token_queue is not None:
+                req._token_queue.put(next_tok)
+
+            if req.is_finished():
+                self._finalize_request(req)
+        else:
+            # Non-final chunk: advance progress, do NOT sample a token
+            req.log_event("CHUNK_DONE", chunk_end=chunk_end, elapsed_ms=round(elapsed_ms, 2))
+            self.scheduler.on_chunk_complete(req, chunk_end)
 
     def _step_decode(self, requests: List[Request]) -> None:
         """Generate one token for each decode request — processed individually."""
@@ -358,4 +380,10 @@ class LLMEngine:
         m["kv_cache_utilization_pct"] = round(self.block_manager.utilization() * 100, 1)
         m["device"] = self.device
         m["model_id"] = self.model_config.model_id
+        if self.prefix_cache is not None:
+            pc = self.prefix_cache.stats()
+            m["prefix_cache_hits"] = pc["hit_count"]
+            m["prefix_cache_misses"] = pc["miss_count"]
+            m["prefix_cache_hit_rate_pct"] = round(pc["hit_rate"] * 100, 1)
+            m["prefix_cached_blocks"] = pc["cached_blocks"]
         return m

@@ -199,6 +199,27 @@ async def lifecycle(body: LifecycleRequest, http_req: FastAPIRequest):
     )
 
 
+@router.get("/prefix_cache", summary="Prefix / prompt cache statistics")
+async def prefix_cache_stats(http_req: FastAPIRequest):
+    """
+    Returns the current state of the prefix KV cache trie:
+    how many blocks are cached, hit/miss counts, and hit rate.
+    A high hit_rate_pct means repeated system prompts or few-shot prefixes
+    are being reused — skipping their prefill entirely.
+    """
+    engine = http_req.app.state.engine
+    if engine.prefix_cache is None:
+        return {"enabled": False, "message": "Prefix caching is disabled (enable_prefix_caching=False)"}
+    pc = engine.prefix_cache.stats()
+    return {
+        "enabled": True,
+        "cached_blocks": pc["cached_blocks"],
+        "hit_count": pc["hit_count"],
+        "miss_count": pc["miss_count"],
+        "hit_rate_pct": round(pc["hit_rate"] * 100, 2),
+    }
+
+
 @router.post("/batch", response_model=BatchResponse,
              summary="Continuous-batching demo: submit N prompts simultaneously")
 async def batch(body: BatchRequest, http_req: FastAPIRequest):

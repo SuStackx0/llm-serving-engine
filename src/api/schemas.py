@@ -138,3 +138,8 @@ class EngineStats(BaseModel):
     total_tokens_in: int
     total_tokens_out: int
     uptime_s: float
+    # Prefix cache (present only when prefix caching is enabled)
+    prefix_cache_hits: Optional[int] = None
+    prefix_cache_misses: Optional[int] = None
+    prefix_cache_hit_rate_pct: Optional[float] = None
+    prefix_cached_blocks: Optional[int] = None

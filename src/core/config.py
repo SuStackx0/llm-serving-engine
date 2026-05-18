@@ -51,6 +51,14 @@ class EngineConfig:
     # Preemption
     preemption_mode: str = "requeue"   # "requeue" or "drop"
 
+    # Chunked prefill
+    enable_chunked_prefill: bool = True
+    max_chunk_size: int = 256    # max tokens per prefill chunk
+    min_chunk_size: int = 64     # floor for adaptive sizing
+
+    # Prefix / prompt caching
+    enable_prefix_caching: bool = True
+
     # Device
     device: str = "auto"    # "auto" | "mps" | "cpu" | "cuda"
     dtype: str = "auto"     # "auto" | "float32" | "float16"

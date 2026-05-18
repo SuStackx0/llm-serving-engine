@@ -15,7 +15,7 @@ This eliminates fragmentation: every block is the same size, so any free
 block fits any request.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 
 class PhysicalBlockManager:
@@ -30,6 +30,9 @@ class PhysicalBlockManager:
 
         # Maps request_id → list of physical block IDs it holds
         self._owned: Dict[str, List[int]] = {}
+
+        # Blocks owned by the prefix cache — NOT freed when a request ends
+        self._cached_block_ids: Set[int] = set()
 
     # ------------------------------------------------------------------
     # Allocation
@@ -62,10 +65,24 @@ class PhysicalBlockManager:
     # ------------------------------------------------------------------
 
     def free(self, request_id: str) -> int:
-        """Free all blocks belonging to request_id. Returns count freed."""
+        """Free all non-cached blocks belonging to request_id. Returns count freed."""
         blocks = self._owned.pop(request_id, [])
-        self._free.extend(blocks)
-        return len(blocks)
+        freed = 0
+        for bid in blocks:
+            if bid not in self._cached_block_ids:
+                self._free.append(bid)
+                freed += 1
+        return freed
+
+    def mark_cached(self, block_ids: List[int]) -> None:
+        """Mark blocks as owned by the prefix cache (survive request free())."""
+        self._cached_block_ids.update(block_ids)
+
+    def unmark_cached(self, block_ids: List[int]) -> None:
+        """Return prefix-cache-owned blocks to the free list (eviction path)."""
+        for bid in block_ids:
+            self._cached_block_ids.discard(bid)
+            self._free.append(bid)
 
     def free_blocks(self, block_ids: List[int], request_id: Optional[str] = None) -> None:
         """Free a specific list of block ids."""

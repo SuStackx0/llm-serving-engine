@@ -44,6 +44,10 @@ class MetricsCollector:
         self._count_ttft: int = 0
         self._count_tpot: int = 0
 
+        # Prefix cache counters
+        self._prefix_cache_hits: int = 0
+        self._prefix_cache_misses: int = 0
+
         self._start_time = time.monotonic()
 
     def record_token(self) -> None:
@@ -85,6 +89,14 @@ class MetricsCollector:
                 finish_reason=request.status.value,
             ))
 
+    def record_prefix_cache_hit(self, matched_tokens: int) -> None:
+        with self._lock:
+            self._prefix_cache_hits += 1
+
+    def record_prefix_cache_miss(self) -> None:
+        with self._lock:
+            self._prefix_cache_misses += 1
+
     def throughput_tok_s(self) -> float:
         """Output tokens per second over the recent window."""
         with self._lock:
@@ -116,4 +128,6 @@ class MetricsCollector:
                 "avg_ttft_ms": self.avg_ttft_ms(),
                 "avg_tpot_ms": self.avg_tpot_ms(),
                 "uptime_s": time.monotonic() - self._start_time,
+                "prefix_cache_hits": self._prefix_cache_hits,
+                "prefix_cache_misses": self._prefix_cache_misses,
             }

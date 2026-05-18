@@ -76,6 +76,15 @@ class Request:
     # How many tokens have been stored in KV cache (prompt + generated so far)
     num_cached_tokens: int = 0
 
+    # Chunked prefill state (set by scheduler each step)
+    tokens_prefilled: int = 0   # prompt tokens stored in KV cache so far
+    chunk_start: int = 0        # window start for current prefill step
+    chunk_end: int = 0          # window end (exclusive) for current prefill step
+
+    # Prefix cache state
+    prefix_match_len: int = 0                                           # tokens matched from cache (multiple of block_size)
+    cached_block_ids: List[int] = field(default_factory=list)           # borrowed blocks (not freed on request end)
+
     # Timing
     prefill_start_time: Optional[float] = None
     first_token_time: Optional[float] = None
@@ -137,7 +146,7 @@ class SchedulerOutput:
 @dataclass
 class AttentionMetadata:
     """Metadata passed to each transformer layer describing the current batch."""
-    # Each prefill request's prompt length (tokens to process)
+    # Each prefill request's chunk length (tokens to process this step)
     prefill_seq_lens: List[int]
     # Block tables for each prefill request (logical → physical blocks)
     prefill_block_tables: List[List[int]]
@@ -145,6 +154,9 @@ class AttentionMetadata:
     decode_context_lens: List[int]
     # Block tables for each decode request
     decode_block_tables: List[List[int]]
+    # For chunked prefill: absolute slot where each chunk starts writing KV
+    # Length matches prefill_seq_lens. None means start_slot=0 (backward compat).
+    prefill_chunk_starts: Optional[List[int]] = None
 
     @property
     def num_prefill_tokens(self) -> int:
