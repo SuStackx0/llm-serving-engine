@@ -213,8 +213,10 @@ class Scheduler:
         decode_q = sum(1 for r in self.running if r.status == SequenceStatus.DECODING)
         total = self.block_manager.num_blocks
         free_frac = self.block_manager.num_free_blocks() / total if total > 0 else 1.0
-        pressure = max(0.1, free_frac) * max(1.0, 4.0 / max(1, decode_q))
-        return max(self.min_chunk_size, int(self.max_chunk_size * min(1.0, pressure)))
+        # decode_factor < 1 when decode_q > 4; free_frac < 1 when memory is tight
+        decode_factor = 1.0 / max(1.0, decode_q / 4.0)
+        scale = max(0.1, free_frac) * decode_factor
+        return max(self.min_chunk_size, int(self.max_chunk_size * scale))
 
     def on_token_generated(
         self, request: Request, token_id: int, eos_token_id: int

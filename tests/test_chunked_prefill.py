@@ -85,7 +85,8 @@ class TestChunkWindows:
         assert len(out.prefill_requests) == 1
         r = out.prefill_requests[0]
         assert r.chunk_start == 0
-        assert r.chunk_end == 32  # capped at max_chunk_size
+        assert 16 <= r.chunk_end <= 32  # adaptive, but bounded by [min, max]
+        assert r.chunk_end <= req.prompt_len
 
     def test_chunk_end_capped_at_prompt_len_for_short_prompts(self):
         s = make_scheduler(max_chunk_size=64, min_chunk_size=16)
@@ -94,7 +95,7 @@ class TestChunkWindows:
         out = s.schedule()
         r = out.prefill_requests[0]
         assert r.chunk_start == 0
-        assert r.chunk_end == 20  # prompt shorter than chunk size
+        assert r.chunk_end == 20  # prompt shorter than any chunk size
 
     def test_subsequent_chunks_advance_window(self):
         s = make_scheduler(max_chunk_size=32, min_chunk_size=16)
@@ -104,30 +105,31 @@ class TestChunkWindows:
         # First chunk
         out = s.schedule()
         r = out.prefill_requests[0]
-        s.on_chunk_complete(r, r.chunk_end)  # simulate engine completing chunk
+        first_end = r.chunk_end
+        s.on_chunk_complete(r, first_end)
 
-        # Second chunk
+        # Second chunk must start where the first ended
         out2 = s.schedule()
         r2 = out2.prefill_requests[0]
-        assert r2.chunk_start == 32
-        assert r2.chunk_end == 64
+        assert r2.chunk_start == first_end
+        assert r2.chunk_end > first_end  # made forward progress
 
     def test_final_chunk_reaches_prompt_len(self):
         s = make_scheduler(max_chunk_size=32, min_chunk_size=16)
         req = make_request(prompt_len=80, max_tokens=5)
         s.add_request(req)
 
-        for expected_start in [0, 32, 64]:
+        for _ in range(20):  # safety limit
             out = s.schedule()
+            if not out.prefill_requests:
+                break
             r = out.prefill_requests[0]
-            assert r.chunk_start == expected_start
             chunk_end = r.chunk_end
-            if chunk_end < 80:
-                s.on_chunk_complete(r, chunk_end)
-            else:
-                # Final chunk: simulate on_prefill_complete
+            if chunk_end >= req.prompt_len:
                 s.on_prefill_complete(r)
                 break
+            else:
+                s.on_chunk_complete(r, chunk_end)
 
         assert req.status == SequenceStatus.DECODING
 
@@ -184,7 +186,8 @@ class TestPreemptionResetsChunkState:
 
         out = s.schedule()
         r = out.prefill_requests[0]
-        s.on_chunk_complete(r, r.chunk_end)
+        first_end = r.chunk_end
+        s.on_chunk_complete(r, first_end)
 
         from src.core.types import SchedulerOutput
         dummy_out = SchedulerOutput()
