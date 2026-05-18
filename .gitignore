@@ -1,0 +1,120 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Environment variables
+.env.*
+!.env.example
+
+# FastAPI / Uvicorn
+*.log
+uvicorn.log
+
+# Pytest
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Ruff / Flake8 / Black
+.ruff_cache/
+.cache/
+flake8.log
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# Alembic migrations cache
+alembic/versions/__pycache__/
+
+# Static / media uploads
+uploads/
+media/
+
+# Docker
+docker-compose.override.yml
+
+# Secrets / certificates
+*.pem
+*.key
+*.crt
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (if frontend inside same repo)
+node_modules/
+
+# Generated files
+*.pdf
+*.html
+*.csv
+*.xlsx
+*.zip
+
+# Logs
+logs/
+*.log
+
+# Test output
+nosetests.xml
+test-results/
+
+# Coverage reports
+.coverage.*
