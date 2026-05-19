@@ -33,7 +33,7 @@ class KVCacheManager:
         dtype: torch.dtype,
     ):
         self.num_layers = num_layers
-        self.num_blocks = num_blocks
+        self.num_bloks = num_blocks
         self.block_size = block_size
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim

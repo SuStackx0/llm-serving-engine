@@ -45,6 +45,12 @@ class EngineConfig:
     num_blocks: int = 256           # total physical blocks
 
     # Scheduler limits
+    # max_running_requests: how many requests are in-flight (prefilling or decoding) at once.
+    # This is a SOFTWARE knob, not a hardware limit.
+    # The true ceiling is KV block capacity: num_blocks * block_size / avg_seq_len.
+    # With 256 blocks × 16 tokens and avg 80-token sequences, that's ~51 requests max.
+    # 8 is conservative: keeps TPOT low on CPU/MPS by limiting gather overhead per decode step.
+    # Raise it (e.g. --max-running 32) on GPU where decode is faster.
     max_running_requests: int = 8
     max_waiting_requests: int = 256
 
